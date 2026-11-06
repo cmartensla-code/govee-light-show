@@ -2,9 +2,10 @@ name: Evening effects
 
 on:
   schedule:
-    # Hourly from 4pm to 11pm Pacific in winter and 5pm to midnight in summer. Each run plays
-    # the effect for an hour while the lights are on, and stops right away when they're off.
-    - cron: "5 0-7 * * *"
+    # Every 15 minutes from 4pm to midnight Pacific in winter and 5pm to 1am in summer, so the
+    # effect starts soon after sunset. A run plays for up to an hour while the lights are on,
+    # the next one waits its turn, and runs outside sunset to midnight stop right away.
+    - cron: "*/15 0-7 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

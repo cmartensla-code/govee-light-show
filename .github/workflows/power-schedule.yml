@@ -1,0 +1,30 @@
+name: Power schedule
+
+on:
+  schedule:
+    # Every 10 minutes: on from sunset to midnight and from 4:30am to sunrise, off otherwise
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print the schedule, without changing the lights"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: power-schedule
+  cancel-in-progress: true
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match the schedule
+        run: python3 -u daily_show.py --power ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
