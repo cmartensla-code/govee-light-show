@@ -3,14 +3,16 @@
 
 Paints one color and pattern a day through Govee's cloud API, section by
 section, leaving the neighbors' section dark. With --animate it plays the
-evening effect for that show. No computer has to stay on and the on/off
-schedule set in the Govee app is left alone.
+evening effect for that show. With --power it switches the lights on or off
+to match the schedule: on from sunset to midnight and from MORNING_ON to
+sunrise. No computer has to stay on.
 
 Needs the GOVEE_API_KEY environment variable. Run with --dry-run to see what
 would be sent without changing the lights.
 """
 import datetime
 import json
+import math
 import os
 import random
 import sys
@@ -23,6 +25,12 @@ import zoneinfo
 API = "https://openapi.api.govee.com/router/api/v1"
 SKU = os.environ.get("GOVEE_SKU", "H805C")
 TIME_ZONE = zoneinfo.ZoneInfo(os.environ.get("SHOW_TIME_ZONE", "America/Los_Angeles"))
+
+# Simi Valley, CA, for sunset and sunrise. The lights are on from sunset to midnight and from
+# MORNING_ON to sunrise.
+LATITUDE = 34.2694
+LONGITUDE = -118.7815
+MORNING_ON = datetime.time(4, 30)
 
 # The first sections stay dark because they bother the neighbors. Each section is about 4
 # boxes. Scenes and DIY scenes light these sections, so every show is painted section by section.
@@ -129,6 +137,45 @@ def lights_are_off(device, api_key):
     return False
 
 
+def sun_times(day):
+    """Return the local sunrise and sunset for a day, using NOAA's approximation."""
+    g = 2 * math.pi / 365 * (day.timetuple().tm_yday - 1)
+    eqtime = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
+                       - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g))
+    decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g)
+            - 0.006758 * math.cos(2 * g) + 0.000907 * math.sin(2 * g)
+            - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
+    lat = math.radians(LATITUDE)
+    hour_angle = math.degrees(math.acos(
+        math.cos(math.radians(90.833)) / (math.cos(lat) * math.cos(decl))
+        - math.tan(lat) * math.tan(decl)))
+    midnight = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.timezone.utc)
+    rise, set_ = (midnight + datetime.timedelta(minutes=720 - 4 * (LONGITUDE + sign * hour_angle)
+                                                - eqtime) for sign in (1, -1))
+    return rise.astimezone(TIME_ZONE), set_.astimezone(TIME_ZONE)
+
+
+def should_be_on(now):
+    """Report whether the schedule has the lights on at this local time."""
+    sunrise, sunset = sun_times(now.date())
+    return now >= sunset or (now.time() >= MORNING_ON and now < sunrise)
+
+
+def keep_schedule(device, api_key, dry_run):
+    """Switch the lights on or off to match the schedule."""
+    now = datetime.datetime.now(TIME_ZONE)
+    sunrise, sunset = sun_times(now.date())
+    wanted = should_be_on(now)
+    print(f"Sunrise {sunrise:%H:%M}, sunset {sunset:%H:%M}, lights should be "
+          f"{'on' if wanted else 'off'}")
+    if dry_run:
+        return
+    is_on = not lights_are_off(device, api_key)
+    if is_on != wanted:
+        set_power(device, api_key, wanted)
+        print(f"Switched the lights {'on' if wanted else 'off'}.")
+
+
 def pick_for_day(names, day):
     """Pick one name per day, using every name once before any repeats."""
     cycle, position = divmod(day.toordinal(), len(names))
@@ -187,11 +234,11 @@ def set_brightness(device, api_key, percent):
     })
 
 
-def turn_off(device, api_key):
+def set_power(device, api_key, on):
     control(device, api_key, {
         "type": "devices.capabilities.on_off",
         "instance": "powerSwitch",
-        "value": 0,
+        "value": 1 if on else 0,
     })
 
 
@@ -229,6 +276,11 @@ def animate(device, api_key, rgb, pattern, dry_run):
                     return
                 continue
             for kind, value in actions:
+                # Painting switches the lights on, so stop at midnight before sending anything
+                if not should_be_on(datetime.datetime.now(TIME_ZONE)):
+                    print(f"Schedule says off after {step} steps, switching the lights off.")
+                    set_power(device, api_key, False)
+                    return
                 if commands % POWER_CHECK_COMMANDS == 0:
                     if lights_are_off(device, api_key):
                         print(f"Lights went off after {step} steps, stopping the effect.")
@@ -247,15 +299,21 @@ def animate(device, api_key, rgb, pattern, dry_run):
             step += 1
         print(f"Played {step} steps.")
     finally:
-        if pulse and not dry_run and not lights_are_off(device, api_key):
+        if (pulse and not dry_run and should_be_on(datetime.datetime.now(TIME_ZONE))
+                and not lights_are_off(device, api_key)):
             set_brightness(device, api_key, 100)
 
 
 def play_effect(device, api_key, rgb, pattern, dry_run):
-    """Play the effect while the sunset timer has the lights on."""
-    if not dry_run and lights_are_off(device, api_key):
-        print("Lights are off, so no effect now.")
-        return
+    """Play the effect in the evening while the lights are on."""
+    now = datetime.datetime.now(TIME_ZONE)
+    if not dry_run:
+        if now.hour < 12 or not should_be_on(now):
+            print("It isn't evening yet, so no effect now.")
+            return
+        if lights_are_off(device, api_key):
+            print("Lights are off, so no effect now.")
+            return
     effect = "Pulse" if len(set(pattern)) == 1 else "Drift"
     print(f"Effect: {effect} for {EFFECT_MINUTES} minutes")
     animate(device, api_key, rgb, pattern, dry_run)
@@ -269,6 +327,9 @@ def main():
 
     today = datetime.datetime.now(TIME_ZONE).date()
     device = find_device(api_key)
+    if "--power" in sys.argv:
+        keep_schedule(device, api_key, dry_run)
+        return
     shows = {f"{name} {pattern}": (rgb, pattern) for name, rgb, pattern in SHOWS}
 
     name = pick_for_day(list(shows), today)
@@ -286,7 +347,7 @@ def main():
         show_pattern(device, api_key, rgb, PATTERNS[pattern])
     finally:
         if was_off:
-            turn_off(device, api_key)
+            set_power(device, api_key, False)
 
     with open("last-show.txt", "w", encoding="utf-8") as log:
         log.write(f"{today}: {name}\n")

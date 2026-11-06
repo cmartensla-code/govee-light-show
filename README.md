@@ -2,8 +2,9 @@
 
 Gives the Front led lights (H805C) a different show every day: one color and one pattern. Once a
 day, GitHub's free scheduler runs `daily_show.py`, which paints the lights through Govee's cloud,
-so your computer can be off. On and off times stay in the Govee app: on at sunset, off at
-midnight, on at 5am, off at sunrise.
+so your computer can be off. Every 10 minutes the Power schedule workflow switches the lights
+to match the schedule: on from sunset to midnight and from 4:30am to sunrise in Simi Valley,
+with daylight saving handled. It doesn't need the Govee app's timers.
 
 There are 30 shows in `SHOWS` in `daily_show.py`, and each one is used once before any repeats.
 Scenes and DIY scenes aren't used, because they light the section that stays dark for the
