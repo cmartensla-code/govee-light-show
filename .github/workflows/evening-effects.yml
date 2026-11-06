@@ -1,0 +1,32 @@
+name: Evening effects
+
+on:
+  schedule:
+    # Hourly from 4pm to 11pm Pacific in winter and 5pm to midnight in summer. Each run plays
+    # the effect for an hour while the lights are on, and stops right away when they're off.
+    - cron: "5 0-7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print the first steps, without changing the lights"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# A run that starts while the effect is playing waits its turn, so two never play at once
+concurrency:
+  group: evening-effects
+  cancel-in-progress: false
+
+jobs:
+  effect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - name: Play the effect
+        run: python3 -u daily_show.py --animate ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}

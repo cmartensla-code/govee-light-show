@@ -1,0 +1,29 @@
+name: Daily light show
+
+on:
+  schedule:
+    # 23:00 UTC is 4pm Pacific in summer and 3pm in winter, before sunset all year.
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick and send today's show
+        run: python3 daily_show.py
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
+      # The daily commit records the show and keeps GitHub from pausing the schedule
+      - name: Record today's show
+        run: |
+          git config user.name "daily-light-show"
+          git config user.email "daily-light-show@users.noreply.github.com"
+          touch last-show.txt
+          git add last-show.txt
+          git diff --cached --quiet || git commit -m "Record today's show"
+          git push
